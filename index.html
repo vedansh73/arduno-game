@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vedansh Arcade - Arduino Joystick Edition</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background-color: #0b0c10;
+            color: #fff;
+            text-align: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 15px;
+            overflow-x: hidden;
+        }
+        h1 {
+            margin: 5px 0 10px 0;
+            font-size: 28px;
+            color: #66fcf1;
+            text-shadow: 0 0 10px #66fcf1;
+            letter-spacing: 1px;
+        }
+        .controls-panel {
+            background: #1f2833;
+            border: 1px solid #45a29e;
+            padding: 10px 15px;
+            border-radius: 8px;
+            display: inline-flex;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .btn {
+            background: #45a29e;
+            color: #0b0c10;
+            border: none;
+            padding: 8px 16px;
+            font-weight: bold;
+            font-size: 14px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn:hover {
+            background: #66fcf1;
+            box-shadow: 0 0 10px #66fcf1;
+        }
+        .btn-game {
+            background: #1f2833;
+            color: #66fcf1;
+            border: 1px solid #66fcf1;
+        }
+        .btn-game.active {
+            background: #66fcf1;
+            color: #0b0c10;
+            box-shadow: 0 0 12px #66fcf1;
+        }
+        .status-badge {
+            background: #0b0c10;
+            color: #ff4d4d;
+            padding: 5px 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            border: 1px solid #ff4d4d;
+            font-weight: bold;
+        }
+        .status-badge.connected {
+            color: #00ffcc;
+            border-color: #00ffcc;
+        }
+        canvas {
+            background: linear-gradient(to bottom, #1f2833, #0b0c10);
+            border: 3px solid #66fcf1;
+            box-shadow: 0 0 25px rgba(102, 252, 241, 0.4);
+            border-radius: 8px;
+            cursor: pointer;
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin: 0 auto;
+        }
+        .footer-links {
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: #1f2833;
+            border-radius: 6px;
+            display: inline-block;
+            border: 1px solid #45a29e;
+        }
+        .footer-links a {
+            color: #66fcf1;
+            text-decoration: none;
+            margin: 0 12px;
+            font-weight: bold;
+            font-size: 14px;
+            transition: color 0.2s;
+        }
+        .footer-links a:hover {
+            color: #fff;
+            text-shadow: 0 0 8px #66fcf1;
+        }
+        .game-desc {
+            color: #c5c6c7;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>VEDANSH ARCADE (ARDUINO CONTROLLED)</h1>
+
+    <div class="controls-panel">
+        <button class="btn" id="connectPortBtn">🔌 Connect Arduino (COM Port)</button>
+        <div class="status-badge" id="portStatus">Arduino: Disconnected</div>
+        <div>
+            <button class="btn btn-game active" onclick="switchGame('dash')" id="btnDash">1. Dash Deluxe</button>
+            <button class="btn btn-game" onclick="switchGame('space')" id="btnSpace">2. Space Defender</button>
+        </div>
+    </div>
+
+    <p class="game-desc" id="gameInstruction">
+        Controls: <strong>Joystick UP / SPACE</strong> = Jump | <strong>SW Button / CLICK</strong> = Restart
+    </p>
+
+    <canvas id="gameCanvas" width="900" height="400"></canvas>
+
+    <div class="footer-links">
+        <a href="https://discord.gg/TGpDsyVpU" target="_blank">Discord</a>
+        <a href="https://t.me/+VIG47x9kaJYyODE9" target="_blank">Telegram</a>
+        <a href="https://youtube.com/@vedanshsrivastava182?si=B349IFkoP3arYV1p" target="_blank">YouTube</a>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        let activeGame = 'dash';
+        let serialPort = null;
+        let serialReader = null;
+
+        // --- WEB SERIAL API CONNECTION ---
+        document.getElementById("connectPortBtn").addEventListener("click", async () => {
+            if ("serial" in navigator) {
+                try {
+                    serialPort = await navigator.serial.requestPort();
+                    await serialPort.open({ baudRate: 9600 });
+                    document.getElementById("portStatus").innerText = "Arduino: Connected";
+                    document.getElementById("portStatus").classList.add("connected");
+                    readSerialData();
+                } catch (err) {
+                    alert("Serial connection error or canceled: " + err);
+                }
+            } else {
+                alert("Web Serial API is not supported in this browser. Use Chrome or Edge.");
+            }
+        });
+
+        async function readSerialData() {
+            const textDecoder = new TextDecoderStream();
+            const readableStreamClosed = serialPort.readable.pipeTo(textDecoder.writable);
+            serialReader = textDecoder.readable.getReader();
+
+            let buffer = "";
+            while (true) {
+                const { value, done } = await serialReader.read();
+                if (done) break;
+                buffer += value;
+                let lines = buffer.split("\n");
+                buffer = lines.pop(); // Keep partial line
+                for (let line of lines) {
+                    handleArduinoCommand(line.trim());
+                }
+            }
+        }
+
+        function handleArduinoCommand(cmd) {
+            if (activeGame === 'dash') {
+                if (cmd === "JUMP") jumpDash();
+                if (cmd === "FIRE") jumpDash();
+            } else if (activeGame === 'space') {
+                if (cmd === "LEFT") moveSpacePlayer(-25);
+                if (cmd === "RIGHT") moveSpacePlayer(25);
+                if (cmd === "JUMP") moveSpacePlayerY(-20);
+                if (cmd === "DOWN") moveSpacePlayerY(20);
+                if (cmd === "FIRE") fireSpaceLaser();
+            }
+        }
+
+        // --- GAME SWITCHER ---
+        function switchGame(game) {
+            activeGame = game;
+            document.getElementById("btnDash").classList.toggle("active", game === 'dash');
+            document.getElementById("btnSpace").classList.toggle("active", game === 'space');
+            
+            if (game === 'dash') {
+                document.getElementById("gameInstruction").innerHTML = "Controls: <strong>Joystick UP (VRY) / SPACE</strong> = Jump | <strong>SW Button</strong> = Action/Restart";
+                resetDashGame();
+            } else {
+                document.getElementById("gameInstruction").innerHTML = "Controls: <strong>Joystick (VRX/VRY)</strong> = Move | <strong>SW Button / SPACE</strong> = Shoot Laser";
+                resetSpaceGame();
+            }
+        }
+
+        // ==========================================
+        // GAME 1: VEDANSH DASH DELUXE
+        // ==========================================
+        const GROUND_Y = 320;
+        let dashSpeed = 7;
+        let dashScore = 0;
+        let dashGameOver = false;
+        let dashObstacles = [];
+        let dashFrame = 0;
+
+        const dashPlayer = {
+            x: 120, y: GROUND_Y - 40, size: 40, dy: 0,
+            gravity: 0.85, jumpPower: -14.5, grounded: false, rotation: 0
+        };
+
+        function jumpDash() {
+            if (dashGameOver) {
+                resetDashGame();
+            } else if (dashPlayer.grounded) {
+                dashPlayer.dy = dashPlayer.jumpPower;
+                dashPlayer.grounded = false;
+            }
+        }
+
+        function resetDashGame() {
+            dashPlayer.y = GROUND_Y - dashPlayer.size;
+            dashPlayer.dy = 0;
+            dashPlayer.grounded = true;
+            dashObstacles = [];
+            dashScore = 0;
+            dashSpeed = 7;
+            dashFrame = 0;
+            dashGameOver = false;
+        }
+
+        function updateDash() {
+            if (dashGameOver) return;
+            dashFrame++;
+            dashScore += 0.1;
+
+            dashPlayer.dy += dashPlayer.gravity;
+            dashPlayer.y += dashPlayer.dy;
+
+            if (dashPlayer.y + dashPlayer.size >= GROUND_Y) {
+                dashPlayer.y = GROUND_Y - dashPlayer.size;
+                dashPlayer.dy = 0;
+                dashPlayer.grounded = true;
+            } else {
+                dashPlayer.rotation += 0.15;
+            }
+
+            if (dashFrame % Math.max(50, Math.floor(100 - dashSpeed * 2.5)) === 0) {
+                dashObstacles.push({ x: canvas.width, y: GROUND_Y, width: 35, height: 40 });
+            }
+
+            for (let i = dashObstacles.length - 1; i >= 0; i--) {
+                let obs = dashObstacles[i];
+                obs.x -= dashSpeed;
+
+                if (dashPlayer.x < obs.x + obs.width &&
+                    dashPlayer.x + dashPlayer.size > obs.x &&
+                    dashPlayer.y + dashPlayer.size > obs.y - obs.height) {
+                    dashGameOver = true;
+                }
+
+                if (obs.x + obs.width < 0) dashObstacles.splice(i, 1);
+            }
+        }
+
+        function drawDash() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Ground
+            ctx.fillStyle = '#1f2833';
+            ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+            ctx.strokeStyle = '#66fcf1';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(0, GROUND_Y, canvas.width, 2);
+
+            // Player
+            if (!dashGameOver) {
+                ctx.save();
+                ctx.translate(dashPlayer.x + 20, dashPlayer.y + 20);
+                ctx.rotate(dashPlayer.rotation);
+                ctx.fillStyle = '#00ffcc';
+                ctx.fillRect(-20, -20, 40, 40);
+                ctx.fillStyle = '#0b0c10';
+                ctx.fillRect(-10, -10, 20, 20);
+                ctx.restore();
+            }
+
+            // Obstacles
+            ctx.fillStyle = '#ff0055';
+            dashObstacles.forEach(obs => {
+                ctx.beginPath();
+                ctx.moveTo(obs.x, obs.y);
+                ctx.lineTo(obs.x + obs.width / 2, obs.y - obs.height);
+                ctx.lineTo(obs.x + obs.width, obs.y);
+                ctx.closePath();
+                ctx.fill();
+            });
+
+            // Score
+            ctx.fillStyle = '#66fcf1';
+            ctx.font = 'bold 20px Arial';
+            ctx.fillText("SCORE: " + Math.floor(dashScore), 20, 35);
+
+            if (dashGameOver) {
+                ctx.fillStyle = 'rgba(0,0,0,0.85)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#ff0055';
+                ctx.font = 'bold 40px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 10);
+                ctx.fillStyle = '#fff';
+                ctx.font = '20px Arial';
+                ctx.fillText("Press SW / SPACE / Click to Restart", canvas.width / 2, canvas.height / 2 + 30);
+                ctx.textAlign = 'left';
+            }
+        }
+
+        // ==========================================
+        // GAME 2: SPACE DEFENDER
+        // ==========================================
+        let spaceScore = 0;
+        let spaceGameOver = false;
+        let spacePlayer = { x: 425, y: 320, width: 50, height: 30 };
+        let spaceLasers = [];
+        let spaceEnemies = [];
+        let spaceFrame = 0;
+
+        function moveSpacePlayer(dx) {
+            if (spaceGameOver) return;
+            spacePlayer.x = Math.max(0, Math.min(canvas.width - spacePlayer.width, spacePlayer.x + dx));
+        }
+
+        function moveSpacePlayerY(dy) {
+            if (spaceGameOver) return;
+            spacePlayer.y = Math.max(50, Math.min(canvas.height - spacePlayer.height - 10, spacePlayer.y + dy));
+        }
+
+        function fireSpaceLaser() {
+            if (spaceGameOver) {
+                resetSpaceGame();
+            } else {
+                spaceLasers.push({ x: spacePlayer.x + spacePlayer.width / 2 - 3, y: spacePlayer.y, width: 6, height: 15 });
+            }
+        }
+
+        function resetSpaceGame() {
+            spacePlayer = { x: 425, y: 320, width: 50, height: 30 };
+            spaceLasers = [];
+            spaceEnemies = [];
+            spaceScore = 0;
+            spaceFrame = 0;
+            spaceGameOver = false;
+        }
+
+        function updateSpace() {
+            if (spaceGameOver) return;
+            spaceFrame++;
+
+            // Lasers
+            for (let i = spaceLasers.length - 1; i >= 0; i--) {
+                spaceLasers[i].y -= 9;
+                if (spaceLasers[i].y < 0) spaceLasers.splice(i, 1);
+            }
+
+            // Spawn Enemies
+            if (spaceFrame % 45 === 0) {
+                spaceEnemies.push({ x: Math.random() * (canvas.width - 40), y: -40, width: 40, height: 30, speed: Math.random() * 2 + 2 });
+            }
+
+            // Move Enemies & Collisions
+            for (let i = spaceEnemies.length - 1; i >= 0; i--) {
+                let enemy = spaceEnemies[i];
+                enemy.y += enemy.speed;
+
+                // Player Collision
+                if (spacePlayer.x < enemy.x + enemy.width &&
+                    spacePlayer.x + spacePlayer.width > enemy.x &&
+                    spacePlayer.y < enemy.y + enemy.height &&
+                    spacePlayer.y + spacePlayer.height > enemy.y) {
+                    spaceGameOver = true;
+                }
+
+                // Laser Collision
+                for (let j = spaceLasers.length - 1; j >= 0; j--) {
+                    let laser = spaceLasers[j];
+                    if (laser.x < enemy.x + enemy.width &&
+                        laser.x + laser.width > enemy.x &&
+                        laser.y < enemy.y + enemy.height &&
+                        laser.y + laser.height > enemy.y) {
+                        spaceEnemies.splice(i, 1);
+                        spaceLasers.splice(j, 1);
+                        spaceScore += 10;
+                        break;
+                    }
+                }
+
+                if (enemy.y > canvas.height) spaceEnemies.splice(i, 1);
+            }
+        }
+
+        function drawSpace() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Ship
+            if (!spaceGameOver) {
+                ctx.fillStyle = '#66fcf1';
+                ctx.beginPath();
+                ctx.moveTo(spacePlayer.x + spacePlayer.width / 2, spacePlayer.y);
+                ctx.lineTo(spacePlayer.x, spacePlayer.y + spacePlayer.height);
+                ctx.lineTo(spacePlayer.x + spacePlayer.width, spacePlayer.y + spacePlayer.height);
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            // Lasers
+            ctx.fillStyle = '#ff00ff';
+            spaceLasers.forEach(laser => ctx.fillRect(laser.x, laser.y, laser.width, laser.height));
+
+            // Enemies
+            ctx.fillStyle = '#ffcc00';
+            spaceEnemies.forEach(e => ctx.fillRect(e.x, e.y, e.width, e.height));
+
+            // Score
+            ctx.fillStyle = '#66fcf1';
+            ctx.font = 'bold 20px Arial';
+            ctx.fillText("SPACE SCORE: " + spaceScore, 20, 35);
+
+            if (spaceGameOver) {
+                ctx.fillStyle = 'rgba(0,0,0,0.85)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#ff0055';
+                ctx.font = 'bold 40px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 10);
+                ctx.fillStyle = '#fff';
+                ctx.font = '20px Arial';
+                ctx.fillText("Press SW / SPACE / Click to Restart", canvas.width / 2, canvas.height / 2 + 30);
+                ctx.textAlign = 'left';
+            }
+        }
+
+        // --- KEYBOARD LISTENERS (FOR PC PLAY WITHOUT ARDUINO) ---
+        window.addEventListener("keydown", (e) => {
+            if (e.code === "Space" || e.code === "ArrowUp") {
+                if (activeGame === 'dash') jumpDash();
+                if (activeGame === 'space') fireSpaceLaser();
+            }
+            if (activeGame === 'space') {
+                if (e.code === "ArrowLeft") moveSpacePlayer(-25);
+                if (e.code === "ArrowRight") moveSpacePlayer(25);
+            }
+        });
+
+        canvas.addEventListener("pointerdown", () => {
+            if (activeGame === 'dash') jumpDash();
+            if (activeGame === 'space') fireSpaceLaser();
+        });
+
+        // --- MAIN LOOP ---
+        function mainLoop() {
+            if (activeGame === 'dash') {
+                updateDash();
+                drawDash();
+            } else if (activeGame === 'space') {
+                updateSpace();
+                drawSpace();
+            }
+            requestAnimationFrame(mainLoop);
+        }
+
+        mainLoop();
+    </script>
+</body>
+</html>
